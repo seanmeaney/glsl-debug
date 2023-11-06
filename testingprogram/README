@@ -1,0 +1,16 @@
+Sean Meaney 101160763
+
+Added light class (header only)
+set uniforms in setLightUniforms function in light class (called within main loop)
+
+
+
+//Strange names for shaders
+Lighting shader: 
+    Lighting / lit
+
+Checkerboard shader: 
+    Procedural / procedural
+
+Combined Shader: 
+    Blocks / rectangle

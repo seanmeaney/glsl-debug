@@ -1,0 +1,348 @@
+/******************************************************************************
+
+Copyright (C) 2006-2009 Institute for Visualization and Interactive Systems
+(VIS), Universität Stuttgart.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+  * Redistributions of source code must retain the above copyright notice, this
+	list of conditions and the following disclaimer.
+
+  * Redistributions in binary form must reproduce the above copyright notice, this
+	list of conditions and the following disclaimer in the documentation and/or
+	other materials provided with the distribution.
+
+  * Neither the name of the name of VIS, Universität Stuttgart nor the names
+	of its contributors may be used to endorse or promote products derived from
+	this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY DIRECT,
+INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*******************************************************************************/
+
+#include "initLib.h"
+#include <stdio.h>
+#include "../GL/gl.h"
+#include "../GL/glext.h"
+#include "../GL/wglext.h"
+#include "generated/trampolines.h"
+#include "utils/notify.h"
+
+#define EVENT_NAME_LEN (32)
+#define SHMEM_NAME_LEN (64)
+
+/*
+ * ::createEvents
+ */
+BOOL createEvents(HANDLE *outEvtDebugee, HANDLE *outEvtDebugger)
+{
+	wchar_t eventName[EVENT_NAME_LEN];
+	DWORD processId = 0;
+
+	processId = GetCurrentProcessId();
+
+	_snwprintf(eventName, EVENT_NAME_LEN, L"%udbgee", processId);
+	*outEvtDebugee = CreateEventW(NULL, FALSE, FALSE, eventName);
+	if (*outEvtDebugee == NULL) {
+		UT_NOTIFY_VA(LV_ERROR, "creating %s failed\n", eventName);
+		return FALSE;
+	}
+
+	_snwprintf(eventName, EVENT_NAME_LEN, L"%udbgr", processId);
+	*outEvtDebugger = CreateEventW(NULL, FALSE, FALSE, eventName);
+	if (*outEvtDebugger == NULL) {
+		UT_NOTIFY_VA(LV_ERROR, "creating %s failed\n", eventName);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+/*
+ * ::closeEvents
+ */
+BOOL closeEvents(HANDLE *outEvtDebugee, HANDLE *outEvtDebugger)
+{
+	if (*outEvtDebugee != NULL) {
+		if (!CloseHandle(*outEvtDebugee)) {
+			UT_NOTIFY_VA(LV_ERROR, "CloseEvent(%u) failed: %u.", *outEvtDebugee,
+					GetLastError());
+			return FALSE;
+		}
+		*outEvtDebugee = NULL;
+	}
+
+	if (*outEvtDebugger != NULL) {
+		if (!CloseHandle(*outEvtDebugger)){
+			UT_NOTIFY_VA(LV_ERROR, "CloseEvent(%u) failed: %u.", *outEvtDebugger,
+					GetLastError());
+			return FALSE;
+		}
+		*outEvtDebugger = NULL;
+	}
+
+	return TRUE;
+}
+
+
+/*
+ * ::openEvents
+ */
+BOOL openEvents(HANDLE *outEvtDebugee, HANDLE *outEvtDebugger)
+{
+	DWORD processId = 0;
+
+	/* TODO: Possible hazard when using multiple instances simultanously. */
+	processId = GetCurrentProcessId();
+	return openEventsProc(outEvtDebugee, outEvtDebugger, processId);
+}
+
+BOOL openEventsProc(HANDLE *outEvtDebugee, HANDLE *outEvtDebugger, DWORD processId)
+{
+	wchar_t eventName[EVENT_NAME_LEN];
+
+	/* Sanity checks. */
+	if ((outEvtDebugee == NULL) || (outEvtDebugger == NULL)) {
+		return TRUE;
+	}
+
+	_snwprintf(eventName, EVENT_NAME_LEN, L"%udbgee", processId);
+	if ((*outEvtDebugee = OpenEventW(EVENT_ALL_ACCESS, FALSE, eventName))
+			== NULL) {
+		UT_NOTIFY_VA(LV_ERROR, "OpenEvent(\"%s\") failed: %u.",
+				eventName, GetLastError());
+		return FALSE;
+	}
+
+	_snwprintf(eventName, EVENT_NAME_LEN, L"%udbgr", processId);
+	if ((*outEvtDebugger = OpenEventW(EVENT_ALL_ACCESS, FALSE, eventName))
+			== NULL) {
+		UT_NOTIFY_VA(LV_ERROR, "OpenEvent(\"%s\") failed: %u.",
+				eventName, GetLastError());
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+/**** Shared memory funcs ****/
+
+/*
+ * ::initSharedMemory
+ */
+BOOL initSharedMemory(HANDLE *outShMem, void **outBaseAddr, int size)
+{
+	char shmemName[SHMEM_NAME_LEN];
+
+	_snprintf(shmemName, SHMEM_NAME_LEN, "%uSHM", GetCurrentProcessId());
+	/* this creates a non-inheritable shared memory mapping! */
+	*outShMem = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, size, shmemName);
+	if (*outShMem == NULL || *outShMem == INVALID_HANDLE_VALUE) {
+		UT_NOTIFY_VA(LV_ERROR, "Creation of shared mem segment %s failed: %u\n", shmemName, GetLastError());
+		return FALSE;
+	}
+
+	/* FILE_MAP_WRITE implies read */
+	*outBaseAddr = MapViewOfFile(*outShMem, FILE_MAP_WRITE, 0, 0, size);
+	if (*outBaseAddr == NULL) {
+		UT_NOTIFY_VA(LV_ERROR, "View mapping of shared mem segment %s failed: %u\n", shmemName, GetLastError());
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+/*
+ * ::closeSharedMemory
+ */
+BOOL closeSharedMemory(HANDLE* hShMem, void **baseAddr) {
+
+	if (*baseAddr != NULL) {
+		if (!UnmapViewOfFile(*baseAddr)) {
+			UT_NOTIFY_VA(LV_ERROR, "View unmapping of shared mem segment failed: %u",
+					GetLastError());
+			return FALSE;
+		}
+		*baseAddr = NULL;
+	}
+
+	if ((*hShMem != NULL) && (*hShMem != INVALID_HANDLE_VALUE)) {
+		if (!CloseHandle(*hShMem)) {
+			UT_NOTIFY_VA(LV_ERROR, "Closing handle of shared mem segment failed: %u",
+					GetLastError());
+			return FALSE;
+		}
+		*hShMem = INVALID_HANDLE_VALUE;
+	}
+
+	return TRUE;
+}
+
+/*
+ * ::openSharedMemory
+ */
+BOOL openSharedMemory(HANDLE *outShMem, void **outBaseAddr, const int size)
+{
+	char shMemName[SHMEM_NAME_LEN];
+
+	if (!GetEnvironmentVariableA("GLSL_DEBUGGER_SHMID", shMemName,
+					SHMEM_NAME_LEN)) {
+		UT_NOTIFY_VA(LV_ERROR, "Oh Shit! No Shmid! Set GLSL_DEBUGGER_SHMID.");
+		return FALSE;
+	}
+
+	/* This creates a non-inheritable shared memory mapping! */
+	*outShMem = OpenFileMappingA(FILE_MAP_WRITE, FALSE, shMemName);
+	if ((*outShMem == NULL) || (*outShMem == INVALID_HANDLE_VALUE)) {
+		UT_NOTIFY_VA(LV_ERROR, "Opening of shared mem segment \"%s\" failed: %u.",
+				shMemName, GetLastError());
+		return FALSE;
+	}
+
+	/* FILE_MAP_WRITE implies read */
+	*outBaseAddr = MapViewOfFile(*outShMem, FILE_MAP_WRITE, 0, 0, size);
+	if (*outBaseAddr == NULL) {
+		UT_NOTIFY_VA(LV_ERROR, "View mapping of shared mem segment \"%s\" failed: %u.",
+				shMemName, GetLastError());
+		CloseHandle(*outShMem);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+/** Window class for GL context window. */
+static const char *INITCTX_WNDCLASS_NAME = "GLSLDEVIL DEBUGLIB WINDOW";
+
+/*
+ * ::createGlInitContext
+ */
+BOOL createGlInitContext(GlInitContext *outCtx) {
+	HINSTANCE hInst = GetModuleHandle(NULL);
+	GLuint pixelFormat = 0;
+	PIXELFORMATDESCRIPTOR pfd = {sizeof(PIXELFORMATDESCRIPTOR), 1,
+		PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
+		PFD_TYPE_RGBA, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0,
+		PFD_MAIN_PLANE, 0, 0, 0, 0};
+	WNDCLASSEXA wndClass;
+
+	if (outCtx == NULL) {
+		return FALSE;
+	}
+
+	outCtx->hWnd = NULL;
+	outCtx->hDC = NULL;
+	outCtx->hRC = NULL;
+
+	/* Register window class, if not yet available. */
+	if (!GetClassInfoExA(hInst, INITCTX_WNDCLASS_NAME, &wndClass)) {
+		ZeroMemory(&wndClass, sizeof(WNDCLASSEX));
+		wndClass.cbSize = sizeof(WNDCLASSEX);
+		wndClass.style = CS_CLASSDC;
+		wndClass.lpfnWndProc = DefWindowProc;
+		wndClass.hInstance = hInst;
+		wndClass.lpszClassName = INITCTX_WNDCLASS_NAME;
+
+		if (!RegisterClassExA(&wndClass)) {
+			UT_NOTIFY_VA(LV_ERROR, "Registering window class for GL detours initialisation "
+					"failed: %u", GetLastError());
+			return FALSE;
+		}
+	}
+
+	/* Create window. */
+	if ((outCtx->hWnd = CreateWindowExA(WS_EX_APPWINDOW,
+							INITCTX_WNDCLASS_NAME, "", WS_POPUP, 0, 0, 1, 1, NULL, NULL, hInst,
+							NULL)) == NULL) {
+		UT_NOTIFY_VA(LV_ERROR, "Creating window for GL detours initialisation failed:",
+				GetLastError());
+		releaseGlInitContext(outCtx);
+		return FALSE;
+	}
+
+	/* Create OpenGL context. */
+	outCtx->hDC = GetDC(outCtx->hWnd);
+
+	if ((pixelFormat = ChoosePixelFormat(outCtx->hDC, &pfd)) == 0) {
+		UT_NOTIFY_VA(LV_ERROR, "ChoosePixelFormat failed: %u", GetLastError());
+		releaseGlInitContext(outCtx);
+		return FALSE;
+	}
+	if (!SetPixelFormat(outCtx->hDC, pixelFormat, &pfd)) {
+		UT_NOTIFY_VA(LV_ERROR, "SetPixelFormat failed: %u", GetLastError());
+		releaseGlInitContext(outCtx);
+		return FALSE;
+	}
+
+	if ((outCtx->hRC = wglCreateContext(outCtx->hDC)) == NULL) {
+		UT_NOTIFY_VA(LV_ERROR, "wglCreateContext failed: %u", GetLastError());
+		releaseGlInitContext(outCtx);
+		return FALSE;
+	}
+	if (!wglMakeCurrent(outCtx->hDC, outCtx->hRC)) {
+		UT_NOTIFY_VA(LV_ERROR, "wglMakeCurrent failed: %u", GetLastError());
+		releaseGlInitContext(outCtx);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+/*
+ * ::releaseGlInitContext
+ */
+BOOL releaseGlInitContext(GlInitContext *ctx) {
+	BOOL retval = TRUE;
+	BOOL (APIENTRYP myMakeCurrent)(HDC, HGLRC) = (OrigwglMakeCurrent != NULL)
+	? OrigwglMakeCurrent : wglMakeCurrent;
+	BOOL (APIENTRYP myDeleteContext)(HGLRC) = (OrigwglDeleteContext != NULL)
+	? OrigwglDeleteContext : wglDeleteContext;
+
+	if (ctx == NULL) {
+		UT_NOTIFY_VA(LV_WARN, "'ctx' must not be NULL when calling releaseGlInitContext");
+		return FALSE;
+	}
+
+	myMakeCurrent(NULL, NULL);
+
+	if (ctx->hRC != NULL) {
+		if (!myDeleteContext(ctx->hRC)) {
+			UT_NOTIFY_VA(LV_ERROR, "wglDeleteContext failed: %u", GetLastError());
+			retval = FALSE;
+		}
+	}
+
+	if ((ctx->hWnd != NULL) && (ctx->hDC != NULL)) {
+		if (!ReleaseDC(ctx->hWnd, ctx->hDC)) {
+			UT_NOTIFY_VA(LV_ERROR, "ReleaseDC failed: %u", GetLastError());
+			retval = FALSE;
+		}
+	}
+
+	if (ctx->hWnd != NULL) {
+		if (!DestroyWindow(ctx->hWnd)) {
+			UT_NOTIFY_VA(LV_ERROR, "DestroyWindow failed: %u", GetLastError());
+			retval = FALSE;
+		}
+	}
+
+	ctx->hRC = NULL;
+	ctx->hDC = NULL;
+	ctx->hWnd = NULL;
+
+	return retval;
+}

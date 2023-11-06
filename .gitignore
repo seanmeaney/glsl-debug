@@ -1,0 +1,54 @@
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.pyc
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+
+# CMake stuff
+CMakeCache.txt
+CMakeFiles
+cmake_install.cmake
+Makefile
+
+# VS stuff
+*.vcxproj.*
+*.suo
+*.sdf
+*.opensdf
+
+# It required for windows build and have ugly distribution model.
+detours/
+
+# output & generated stuff
+Build/
+build/
+bin
+lib
+glsldb/DebugLib/generated/
+GLSLCompiler/glslang/MachineIndependent/generated_glsl_lexer.cpp
+GLSLCompiler/glslang/MachineIndependent/generated_glsl_parser.cpp
+GLSLCompiler/glslang/MachineIndependent/generated_glsl_parser.output
+GLSLCompiler/glslang/MachineIndependent/generated_glsl_parser.hpp
+
+# QT stuff
+moc_*.cxx
+moc_*.cxx_parameters
+ui_*.h
+qrc_*.cxx
+glsldb/glslDevil.qrc.depends
+
+*.bak
+
+glsldb/.DS_Store
+
+.DS_Store
+*.user
